@@ -14,7 +14,8 @@ enum class ReplyResult {
 // 下位机协议不同时，只需要集中修改下面这些组包函数。
 QByteArray passwordCommand(const QString &password);
 QByteArray uidCommand(const QString &command);
-QByteArray initialTimeCommand();
+QByteArray uidCheckCommand();
+QByteArray initialTimeCommand(const QString &command);
 QByteArray currentTimeCommand();
 QByteArray restartCommand();
 

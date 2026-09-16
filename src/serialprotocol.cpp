@@ -14,8 +14,7 @@ QByteArray withLineEnding(const QByteArray &command)
 
 QByteArray passwordCommand(const QString &password)
 {
-    Q_UNUSED(password)
-    return withLineEnding(QByteArrayLiteral("mei+688"));
+    return withLineEnding(password.toUtf8());
 }
 
 QByteArray uidCommand(const QString &command)
@@ -24,9 +23,14 @@ QByteArray uidCommand(const QString &command)
     return command.toUtf8();
 }
 
-QByteArray initialTimeCommand()
+QByteArray uidCheckCommand()
 {
-    return withLineEnding(QByteArrayLiteral("date 2025 10 30 0 0 0"));
+    return withLineEnding(QByteArrayLiteral("set_board_UID"));
+}
+
+QByteArray initialTimeCommand(const QString &command)
+{
+    return withLineEnding(command.toUtf8());
 }
 
 QByteArray currentTimeCommand()

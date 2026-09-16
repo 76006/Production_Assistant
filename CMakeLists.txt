@@ -6,13 +6,15 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 
-find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets SerialPort)
-find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets SerialPort)
+find_package(QT NAMES Qt6 Qt5 REQUIRED COMPONENTS Widgets SerialPort Network)
+find_package(Qt${QT_VERSION_MAJOR} REQUIRED COMPONENTS Widgets SerialPort Network)
 
 add_executable(ProductionAssistant WIN32
     src/main.cpp
     src/mainwindow.cpp
     src/mainwindow.h
+    src/mqttclient.cpp
+    src/mqttclient.h
     src/serialprotocol.cpp
     src/serialprotocol.h
 )
@@ -20,9 +22,9 @@ add_executable(ProductionAssistant WIN32
 target_link_libraries(ProductionAssistant PRIVATE
     Qt${QT_VERSION_MAJOR}::Widgets
     Qt${QT_VERSION_MAJOR}::SerialPort
+    Qt${QT_VERSION_MAJOR}::Network
 )
 
 if(QT_VERSION_MAJOR EQUAL 6)
     qt_finalize_executable(ProductionAssistant)
 endif()
-
