@@ -72,6 +72,7 @@ private:
     void sendUidCommand();
     void sendCurrentTime();
     void sendRestart();
+    void clearAllStatuses();
     void sendOperation(Operation operation, const QByteArray &payload, const QString &safeDescription,
                        bool fromProductionBatch = false);
     void finishOperation(bool success, const QString &detail);
@@ -145,6 +146,7 @@ private:
     QPushButton *m_refreshButton = nullptr;
     QPushButton *m_connectButton = nullptr;
     QPushButton *m_saveConfigurationButton = nullptr;
+    QPushButton *m_clearStatesButton = nullptr;
     QLabel *m_connectionStatus = nullptr;
     QLineEdit *m_passwordInput = nullptr;
     QLineEdit *m_initialTimeInput = nullptr;

@@ -26,10 +26,20 @@
 namespace {
 constexpr int replyTimeoutMs = 3000;
 constexpr int routerReplyTimeoutMs = 5000;
+constexpr int configurationStepDelayMs = 2000;
 
 int operationIndex(int operation)
 {
     return operation;
+}
+
+QString uidTransmissionDescription(const QByteArray &payload)
+{
+    const QByteArray tailBytes = payload.right(8).toHex(' ').toUpper();
+    return QStringLiteral("%1  [实际发送 %2 字节，末尾字节：%3]")
+        .arg(QString::fromUtf8(payload))
+        .arg(payload.size())
+        .arg(QString::fromLatin1(tailBytes));
 }
 } // namespace
 
@@ -63,6 +73,7 @@ MainWindow::MainWindow(QWidget *parent)
     });
     connect(m_saveConfigurationButton, &QPushButton::clicked, this,
             [this] { saveUserConfiguration(true); });
+    connect(m_clearStatesButton, &QPushButton::clicked, this, &MainWindow::clearAllStatuses);
     connect(m_initialTimeInput, &QLineEdit::textChanged, this,
             [this] { saveUserConfiguration(false); });
     for (QLineEdit *input : m_routerParameterInputs) {
@@ -156,6 +167,11 @@ MainWindow::MainWindow(QWidget *parent)
             finishRouterCommand(false, QStringLiteral("未收到大写 OK（5 秒）"));
             return;
         }
+        if (m_pendingOperation == Operation::InitialTime
+            || m_pendingOperation == Operation::Time) {
+            finishOperation(true, QStringLiteral("未返回格式错误信息，设置成功"));
+            return;
+        }
         const QString detail = (m_pendingOperation == Operation::Uid
                                 || m_pendingOperation == Operation::UidCheck)
                                    ? QStringLiteral("设备无返回（3 秒）")
@@ -203,8 +219,8 @@ MainWindow::MainWindow(QWidget *parent)
 void MainWindow::buildUi()
 {
     setWindowTitle(QStringLiteral("生产助手"));
-    setMinimumSize(900, 720);
-    resize(1050, 900);
+    setMinimumSize(1000, 720);
+    resize(1250, 900);
 
     auto *central = new QWidget(this);
     central->setObjectName(QStringLiteral("central"));
@@ -246,6 +262,9 @@ void MainWindow::buildUi()
     m_saveConfigurationButton->setObjectName(QStringLiteral("secondaryButton"));
     m_saveConfigurationButton->setToolTip(
         QStringLiteral("保存到程序目录：%1").arg(configurationFilePath()));
+    m_clearStatesButton = new QPushButton(QStringLiteral("清空所有状态"), connectionCard);
+    m_clearStatesButton->setObjectName(QStringLiteral("secondaryButton"));
+    m_clearStatesButton->setToolTip(QStringLiteral("清空生产配置、4G 配置和链路测试结果"));
     m_connectionStatus = new QLabel(connectionCard);
     m_connectionStatus->setObjectName(QStringLiteral("connectionStatus"));
 
@@ -256,6 +275,7 @@ void MainWindow::buildUi()
     connectionLayout->addWidget(m_refreshButton);
     connectionLayout->addWidget(m_connectButton);
     connectionLayout->addWidget(m_saveConfigurationButton);
+    connectionLayout->addWidget(m_clearStatesButton);
     connectionLayout->addSpacing(6);
     connectionLayout->addWidget(m_connectionStatus);
     pageLayout->addWidget(connectionCard);
@@ -330,6 +350,7 @@ void MainWindow::buildUi()
                 input->setPlaceholderText(QStringLiteral("输入完整初始时间指令"));
             } else {
                 m_uidInput = input;
+                m_uidInput->setMinimumWidth(520);
                 input->setPlaceholderText(QStringLiteral("输入要原样发送的 UID 内容"));
             }
             connect(input, &QLineEdit::returnPressed, button, &QPushButton::click);
@@ -1009,7 +1030,7 @@ void MainWindow::sendUidCommand()
         return;
     }
     const QByteArray payload = SerialProtocol::uidCommand(command);
-    sendOperation(Operation::Uid, payload, QString::fromUtf8(payload));
+    sendOperation(Operation::Uid, payload, uidTransmissionDescription(payload));
 }
 
 void MainWindow::sendCurrentTime()
@@ -1025,7 +1046,36 @@ void MainWindow::sendRestart()
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
     if (answer != QMessageBox::Yes)
         return;
-    sendOperation(Operation::Restart, SerialProtocol::restartCommand(), QStringLiteral("reset"));
+    sendOperation(Operation::Restart, SerialProtocol::restartCommand(), QStringLiteral("reboot"));
+}
+
+void MainWindow::clearAllStatuses()
+{
+    const bool busy = m_pendingOperation != Operation::Count
+                      || m_pendingRouterCommand != RouterCommand::Count
+                      || m_batchRunning || m_productionBatchRunning
+                      || m_linkTestStep != LinkTestStep::Idle;
+    if (busy) {
+        QMessageBox::information(this, QStringLiteral("暂时无法清空"),
+                                 QStringLiteral("请等待当前操作结束后再清空状态。"));
+        return;
+    }
+
+    for (int i = 0; i < operationCount; ++i)
+        setOperationState(static_cast<Operation>(i), UiState::Idle);
+    for (int i = 0; i < routerCommandCount; ++i)
+        setRouterState(static_cast<RouterCommand>(i), UiState::Idle);
+
+    setBatchState(UiState::Idle);
+    m_productionBatchStatus->setProperty("state", QStringLiteral("idle"));
+    m_productionBatchStatus->setText(QStringLiteral("●  等待操作"));
+    m_productionBatchStatus->style()->unpolish(m_productionBatchStatus);
+    m_productionBatchStatus->style()->polish(m_productionBatchStatus);
+
+    m_linkTestStatus->setProperty("state", QStringLiteral("idle"));
+    m_linkTestStatus->setText(QStringLiteral("●  等待测试"));
+    m_linkTestStatus->style()->unpolish(m_linkTestStatus);
+    m_linkTestStatus->style()->polish(m_linkTestStatus);
 }
 
 void MainWindow::sendRouterCommand(RouterCommand command)
@@ -1161,8 +1211,8 @@ void MainWindow::finishRouterCommand(bool success, const QString &detail)
     }
 
     setBatchState(UiState::Sending,
-                  QStringLiteral("已完成 %1/4，准备发送下一项").arg(m_batchIndex));
-    QTimer::singleShot(80, this, [this] {
+                  QStringLiteral("已完成 %1/4，等待 2 秒后发送下一项").arg(m_batchIndex));
+    QTimer::singleShot(configurationStepDelayMs, this, [this] {
         if (m_batchRunning)
             transmitRouterCommand(static_cast<RouterCommand>(m_batchIndex));
     });
@@ -1197,6 +1247,10 @@ void MainWindow::sendOperation(Operation operation, const QByteArray &payload,
     }
 
     appendLog(QStringLiteral("发送"), safeDescription);
+    if (operation == Operation::Restart) {
+        finishOperation(true, QStringLiteral("已发送重启"));
+        return;
+    }
     setOperationState(operation, UiState::Sending, QStringLiteral("已发送，等待设备响应…"));
     m_replyTimer->setInterval(replyTimeoutMs);
     m_replyTimer->start();
@@ -1227,16 +1281,16 @@ void MainWindow::finishOperation(bool success, const QString &detail)
         }
 
         ++m_productionBatchIndex;
-        constexpr int productionStepCount = 5;
+        constexpr int productionStepCount = 6;
         if (m_productionBatchIndex >= productionStepCount) {
-            finishProductionConfiguration(true, QStringLiteral("5 项操作均已成功完成"));
+            finishProductionConfiguration(true, QStringLiteral("6 项操作均已成功完成"));
             return;
         }
 
         m_productionBatchStatus->setText(
-            QStringLiteral("●  进行中  ·  已完成 %1/5，准备下一项")
+            QStringLiteral("●  进行中  ·  已完成 %1/6，等待 2 秒后执行下一项")
                 .arg(m_productionBatchIndex));
-        QTimer::singleShot(80, this, [this] {
+        QTimer::singleShot(configurationStepDelayMs, this, [this] {
             if (m_productionBatchRunning)
                 sendNextProductionConfiguration();
         });
@@ -1278,9 +1332,9 @@ void MainWindow::startProductionConfiguration()
         return;
     }
 
-    const std::array<Operation, 5> sequence = {
-        Operation::Password, Operation::InitialTime, Operation::Uid,
-        Operation::Time, Operation::Restart
+    const std::array<Operation, 6> sequence = {
+        Operation::Password, Operation::InitialTime, Operation::UidCheck,
+        Operation::Uid, Operation::Time, Operation::Restart
     };
     for (const Operation operation : sequence)
         setOperationState(operation, UiState::Idle);
@@ -1288,7 +1342,7 @@ void MainWindow::startProductionConfiguration()
     m_productionBatchRunning = true;
     m_productionBatchIndex = 0;
     m_productionBatchStatus->setProperty("state", QStringLiteral("sending"));
-    m_productionBatchStatus->setText(QStringLiteral("●  进行中  ·  准备第 1/5 项"));
+    m_productionBatchStatus->setText(QStringLiteral("●  进行中  ·  准备第 1/6 项"));
     m_productionBatchStatus->style()->unpolish(m_productionBatchStatus);
     m_productionBatchStatus->style()->polish(m_productionBatchStatus);
     setActionsEnabled(false);
@@ -1319,19 +1373,24 @@ void MainWindow::sendNextProductionConfiguration()
         description = QString::fromUtf8(payload).trimmed();
         break;
     case 2:
-        operation = Operation::Uid;
-        payload = SerialProtocol::uidCommand(m_uidInput->text());
-        description = QString::fromUtf8(payload);
+        operation = Operation::UidCheck;
+        payload = SerialProtocol::uidCheckCommand();
+        description = QStringLiteral("set_board_UID");
         break;
     case 3:
+        operation = Operation::Uid;
+        payload = SerialProtocol::uidCommand(m_uidInput->text());
+        description = uidTransmissionDescription(payload);
+        break;
+    case 4:
         operation = Operation::Time;
         payload = SerialProtocol::currentTimeCommand();
         description = QString::fromUtf8(payload).trimmed();
         break;
-    case 4:
+    case 5:
         operation = Operation::Restart;
         payload = SerialProtocol::restartCommand();
-        description = QStringLiteral("reset");
+        description = QStringLiteral("reboot");
         break;
     default:
         finishProductionConfiguration(false, QStringLiteral("一键配置步骤异常"));
@@ -1339,7 +1398,7 @@ void MainWindow::sendNextProductionConfiguration()
     }
 
     m_productionBatchStatus->setText(
-        QStringLiteral("●  进行中  ·  正在执行第 %1/5 项：%2")
+        QStringLiteral("●  进行中  ·  正在执行第 %1/6 项：%2")
             .arg(m_productionBatchIndex + 1)
             .arg(operationName(operation)));
     sendOperation(operation, payload, description, true);
@@ -1468,6 +1527,7 @@ void MainWindow::setActionsEnabled(bool enabled)
         input->setEnabled(enabled);
     m_batchButton->setEnabled(enabled);
     m_productionBatchButton->setEnabled(enabled);
+    m_clearStatesButton->setEnabled(enabled);
     m_serialMessageButton->setEnabled(enabled && m_serial->isOpen());
 }
 
@@ -2013,8 +2073,41 @@ void MainWindow::processReply(const QString &reply)
     if (m_pendingOperation == Operation::Count)
         return;
 
+    const bool commandNotFound = reply.contains(QStringLiteral("command not found"),
+                                                Qt::CaseInsensitive);
+    QString compactReply = reply;
+    compactReply.remove(QLatin1Char(' '));
+    compactReply.remove(QLatin1Char('\t'));
+    const bool shellPromptReturned = compactReply.contains(QStringLiteral("msh/>"),
+                                                           Qt::CaseInsensitive);
+
+    if (m_pendingOperation == Operation::Password
+        && (commandNotFound || shellPromptReturned)) {
+        finishOperation(true, QStringLiteral("密码验证成功"));
+        return;
+    }
+
     const SerialProtocol::ReplyResult result = SerialProtocol::classifyReply(reply);
+    if (m_pendingOperation == Operation::InitialTime
+        || m_pendingOperation == Operation::Time) {
+        const bool dateUsageError =
+            reply.contains(QStringLiteral("please input: date"), Qt::CaseInsensitive)
+            && reply.contains(QStringLiteral("year month day hour min sec"), Qt::CaseInsensitive);
+        if (dateUsageError || commandNotFound
+            || result == SerialProtocol::ReplyResult::Failure) {
+            finishOperation(false, QStringLiteral("请检查命令格式是否错误"));
+        } else if (result == SerialProtocol::ReplyResult::Success) {
+            finishOperation(true, safeReply);
+        }
+        // 其他返回内容先保留观察；等待期内未出现上述错误即视为成功。
+        return;
+    }
+
     if (m_pendingOperation == Operation::UidCheck) {
+        if (commandNotFound) {
+            finishOperation(false, QStringLiteral("命令不存在，请将版本升级为测试版本"));
+            return;
+        }
         const QString value = reply.trimmed();
         if (value.compare(QStringLiteral("set_board_UID"), Qt::CaseInsensitive) == 0)
             return;

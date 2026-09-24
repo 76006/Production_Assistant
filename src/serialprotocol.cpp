@@ -19,8 +19,16 @@ QByteArray passwordCommand(const QString &password)
 
 QByteArray uidCommand(const QString &command)
 {
-    // UID 输入内容必须逐字节原样发送，不增加任何命令头、命令尾或换行符。
-    return command.toUtf8();
+    // 先剔除输入中可能夹带的换行，再追加一个 MSH 执行命令所需的 CR（0x0D）。
+    QString payload = command;
+    payload.remove(QLatin1Char('\r'));
+    payload.remove(QLatin1Char('\n'));
+    payload.remove(QChar(0x0085));
+    payload.remove(QChar(0x2028));
+    payload.remove(QChar(0x2029));
+    QByteArray bytes = payload.toUtf8();
+    bytes.append('\r');
+    return bytes;
 }
 
 QByteArray uidCheckCommand()
@@ -48,7 +56,7 @@ QByteArray currentTimeCommand()
 
 QByteArray restartCommand()
 {
-    return withLineEnding(QByteArrayLiteral("reset"));
+    return withLineEnding(QByteArrayLiteral("reboot"));
 }
 
 ReplyResult classifyReply(const QString &reply)
